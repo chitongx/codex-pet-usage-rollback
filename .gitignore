@@ -1,2 +1,2 @@
 backups/**/app.asar
-
+.build/
