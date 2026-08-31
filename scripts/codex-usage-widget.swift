@@ -54,6 +54,119 @@ final class UsageStore {
     }
 }
 
+enum LiveUsageError: LocalizedError {
+    case codexCliNotFound
+    case noRateLimitResponse
+    case invalidRateLimitResponse
+
+    var errorDescription: String? {
+        switch self {
+        case .codexCliNotFound:
+            return "找不到 Codex CLI"
+        case .noRateLimitResponse:
+            return "Codex 没有返回额度"
+        case .invalidRateLimitResponse:
+            return "Codex 额度响应格式无法识别"
+        }
+    }
+}
+
+enum LiveUsageFetcher {
+    private static let codexCandidates = [
+        "/Applications/ChatGPT.app/Contents/Resources/codex",
+        "/opt/homebrew/bin/codex",
+        "/usr/local/bin/codex"
+    ]
+
+    static func fetch(completion: @escaping (Result<UsageSnapshot, Error>) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let result = Result { try self.fetchSnapshot() }
+            DispatchQueue.main.async {
+                completion(result)
+            }
+        }
+    }
+
+    private static func fetchSnapshot() throws -> UsageSnapshot {
+        guard let executable = codexCandidates.first(where: FileManager.default.isExecutableFile(atPath:)) else {
+            throw LiveUsageError.codexCliNotFound
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = ["-s", "read-only", "-a", "never", "app-server"]
+
+        let input = Pipe()
+        let output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle(forWritingAtPath: "/dev/null")
+        try process.run()
+
+        let initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"codex-usage-widget\",\"version\":\"0.1.0\"}}}\n"
+        let request = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{}}\n"
+        input.fileHandleForWriting.write(Data((initialize + request).utf8))
+        input.fileHandleForWriting.closeFile()
+
+        defer {
+            if process.isRunning {
+                process.terminate()
+            }
+        }
+
+        var buffer = Data()
+        while process.isRunning || !buffer.isEmpty {
+            guard let chunk = try output.fileHandleForReading.read(upToCount: 64 * 1024), !chunk.isEmpty else {
+                break
+            }
+            buffer.append(chunk)
+
+            while let newline = buffer.firstIndex(of: 10) {
+                let line = buffer.prefix(upTo: newline)
+                buffer.removeSubrange(...newline)
+                guard
+                    let object = try? JSONSerialization.jsonObject(with: line),
+                    let response = object as? [String: Any],
+                    let id = response["id"] as? NSNumber,
+                    id.intValue == 2
+                else {
+                    continue
+                }
+                return try snapshot(from: response)
+            }
+        }
+
+        throw LiveUsageError.noRateLimitResponse
+    }
+
+    private static func snapshot(from response: [String: Any]) throws -> UsageSnapshot {
+        guard
+            let result = response["result"] as? [String: Any],
+            let rateLimits = result["rateLimits"] as? [String: Any],
+            let primary = window(from: rateLimits["primary"]),
+            let secondary = window(from: rateLimits["secondary"])
+        else {
+            throw LiveUsageError.invalidRateLimitResponse
+        }
+
+        return UsageSnapshot(
+            fiveHour: primary,
+            weekly: secondary,
+            updatedAt: Date()
+        )
+    }
+
+    private static func window(from value: Any?) -> UsageWindow? {
+        guard
+            let dictionary = value as? [String: Any],
+            let number = dictionary["usedPercent"] as? NSNumber
+        else {
+            return nil
+        }
+        return try? UsageWindow(usedPercent: min(100, max(0, number.intValue)))
+    }
+}
+
 final class FloatingPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -62,6 +175,7 @@ final class FloatingPanel: NSPanel {
 final class UsageWidgetController: NSObject, NSWindowDelegate {
     private let store = UsageStore()
     private let panel: FloatingPanel
+    private var refreshTimer: Timer?
     private let fiveHourField = NSTextField(string: "")
     private let weeklyField = NSTextField(string: "")
     private let statusLabel = NSTextField(labelWithString: "")
@@ -84,6 +198,18 @@ final class UsageWidgetController: NSObject, NSWindowDelegate {
         panel.center()
         panel.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        refreshTimer = Timer.scheduledTimer(
+            timeInterval: 60,
+            target: self,
+            selector: #selector(refreshLiveUsage),
+            userInfo: nil,
+            repeats: true
+        )
+        refreshTimer?.tolerance = 10
+    }
+
+    deinit {
+        refreshTimer?.invalidate()
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -134,7 +260,7 @@ final class UsageWidgetController: NSObject, NSWindowDelegate {
         title.frame = NSRect(x: 22, y: 211, width: 220, height: 30)
         card.addSubview(title)
 
-        let subtitle = NSTextField(labelWithString: "打开官方页面确认后填写")
+        let subtitle = NSTextField(labelWithString: "只读读取 Codex，失败时保留上次数据")
         subtitle.font = .systemFont(ofSize: 11)
         subtitle.textColor = NSColor.white.withAlphaComponent(0.72)
         subtitle.frame = NSRect(x: 22, y: 191, width: 230, height: 18)
@@ -154,13 +280,18 @@ final class UsageWidgetController: NSObject, NSWindowDelegate {
         saveButton.frame = NSRect(x: 22, y: 31, width: 92, height: 28)
         card.addSubview(saveButton)
 
+        let refreshButton = NSButton(title: "刷新", target: self, action: #selector(refreshLiveUsage))
+        refreshButton.bezelStyle = .rounded
+        refreshButton.frame = NSRect(x: 120, y: 31, width: 66, height: 28)
+        card.addSubview(refreshButton)
+
         let openButton = NSButton(
             title: "打开官方用量页",
             target: self,
             action: #selector(openOfficialPage)
         )
         openButton.bezelStyle = .rounded
-        openButton.frame = NSRect(x: 120, y: 31, width: 132, height: 28)
+        openButton.frame = NSRect(x: 190, y: 31, width: 82, height: 28)
         card.addSubview(openButton)
 
         feedbackLabel.font = .systemFont(ofSize: 10)
@@ -199,12 +330,39 @@ final class UsageWidgetController: NSObject, NSWindowDelegate {
 
     private func loadSnapshot() {
         guard let snapshot = store.load() else {
-            statusLabel.stringValue = "尚未保存本地用量"
+            statusLabel.stringValue = "正在读取 Codex 额度…"
+            refreshLiveUsage()
             return
         }
+        apply(snapshot, status: "上次数据：\(Self.dateFormatter.string(from: snapshot.updatedAt))")
+        refreshLiveUsage()
+    }
+
+    @objc private func refreshLiveUsage() {
+        statusLabel.stringValue = "正在读取 Codex 额度…"
+        LiveUsageFetcher.fetch { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case let .success(snapshot):
+                try? self.store.save(snapshot)
+                self.apply(snapshot, status: "自动更新：\(Self.dateFormatter.string(from: snapshot.updatedAt))")
+                self.feedbackLabel.stringValue = ""
+            case let .failure(error):
+                let fallback = self.store.load()
+                if let fallback {
+                    self.apply(fallback, status: "自动读取失败，显示上次数据")
+                } else {
+                    self.statusLabel.stringValue = "自动读取失败，请手动填写"
+                }
+                self.feedbackLabel.stringValue = error.localizedDescription
+            }
+        }
+    }
+
+    private func apply(_ snapshot: UsageSnapshot, status: String) {
         fiveHourField.stringValue = "\(snapshot.fiveHour.remainingPercent)"
         weeklyField.stringValue = "\(snapshot.weekly.remainingPercent)"
-        statusLabel.stringValue = "已保存：\(Self.dateFormatter.string(from: snapshot.updatedAt))"
+        statusLabel.stringValue = status
     }
 
     @objc private func saveSnapshot() {
@@ -225,7 +383,7 @@ final class UsageWidgetController: NSObject, NSWindowDelegate {
                 updatedAt: Date()
             )
             try store.save(snapshot)
-            statusLabel.stringValue = "已保存：\(Self.dateFormatter.string(from: snapshot.updatedAt))"
+            statusLabel.stringValue = "已手动保存：\(Self.dateFormatter.string(from: snapshot.updatedAt))"
             feedbackLabel.stringValue = ""
         } catch {
             feedbackLabel.stringValue = "保存失败，请重试"

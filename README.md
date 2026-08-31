@@ -23,7 +23,7 @@
 
 ## 独立用量悬浮窗口
 
-窗口脚本不修改 Codex，也不读取 Cookies、钥匙串或登录令牌。它只保存你从官方 Usage 页面确认后输入的两个“剩余百分比”，文件位于：
+窗口脚本不修改 Codex，也不读取 Cookies、钥匙串或登录令牌。它会通过本机 Codex CLI 的只读 `app-server` 请求自动读取两个额度窗口；如果当前 CLI 不可用，则回退到本地保存的数据或手动输入。数据文件位于：
 
 `~/Library/Application Support/CodexUsageWidget/usage.json`
 
@@ -37,7 +37,9 @@
 ./scripts/run-codex-usage-widget.command
 ```
 
-窗口会保持在最前面并可拖动。点击“打开官方用量页”，按官方页面确认 5 小时和 1 周剩余额度后填入并保存。由于 OpenAI 没有提供可供此类独立小工具稳定调用的公开桌面额度 API，这个版本采用手动确认方式，不会因私有接口或登录状态变化而影响 Codex。
+窗口会保持在最前面并可拖动，启动后会自动刷新，之后大约每分钟更新一次。点击“刷新”可以立即读取；点击“打开官方用量页”可人工核对。自动方式使用 `codex -s read-only -a never app-server`，不接触私有 HTTP 额度接口，也不改变 Codex 的安装包、登录状态或运行参数。
+
+这是一种独立显示层：它不会嵌入 Codex 宠物，也不会影响 Codex 正常使用。额度读取失败时只影响窗口显示，并保留上次成功数据。
 
 ## GitHub
 

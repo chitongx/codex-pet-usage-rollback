@@ -9,5 +9,8 @@ grep -q "https://help.openai.com/en/articles/20001478" "$script"
 grep -q "5 小时剩余" "$script"
 grep -q "1 周剩余" "$script"
 grep -q "applicationSupport" "$script"
+grep -q "account/rateLimits/read" "$script"
+grep -q '"read-only"' "$script"
+grep -q '"app-server"' "$script"
 
 echo "widget script contract: PASS"
