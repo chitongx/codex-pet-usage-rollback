@@ -23,5 +23,8 @@
 
 ## GitHub
 
-本机 Git 已配置，但当前 GitHub CLI 的登录令牌已失效。重新执行 `gh auth login` 后，可以为本项目添加私有远程仓库并推送；本地回退副本仍需保留，因为 GitHub 不会收到被排除的大型 `app.asar` 文件。
+已创建私有远程仓库：
 
+<https://github.com/chitongx/codex-pet-usage-rollback>
+
+远程仓库保存说明、版本信息、校验文件和恢复脚本；大型 `app.asar` 被 `.gitignore` 排除，仍需保留本机项目目录中的备份文件。
