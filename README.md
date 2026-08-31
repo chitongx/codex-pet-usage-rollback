@@ -21,9 +21,9 @@
 
 脚本会先验证备份校验和，再替换 Codex 的 `app.asar`，并保留当前包为带时间戳的 `.before-restore` 文件。
 
-## 独立用量悬浮窗口
+## 独立用量 Touch Bar companion
 
-窗口脚本不修改 Codex，也不读取 Cookies、钥匙串或登录令牌。它会通过本机 Codex CLI 的只读 `app-server` 请求自动读取两个额度窗口；如果当前 CLI 不可用，则回退到本地保存的数据或手动输入。数据文件位于：
+脚本不修改 Codex，也不读取 Cookies、钥匙串或登录令牌。它会通过本机 Codex CLI 的只读 `app-server` 请求自动读取两个额度窗口；如果当前 CLI 不可用，则回退到本地保存的数据。数据文件位于：
 
 `~/Library/Application Support/CodexUsageWidget/usage.json`
 
@@ -37,9 +37,9 @@
 ./scripts/run-codex-usage-widget.command
 ```
 
-窗口会保持在最前面并可拖动，启动后会自动刷新，之后大约每分钟更新一次。点击“刷新”可以立即读取；点击“打开官方用量页”可人工核对。自动方式使用 `codex -s read-only -a never app-server`，不接触私有 HTTP 额度接口，也不改变 Codex 的安装包、登录状态或运行参数。
+启动后脚本会在 Touch Bar 中显示雷姆图标、`5小时 xx%` 和 `每周 xx%`，并大约每分钟自动刷新。菜单栏图标中可以手动刷新或激活 Touch Bar。自动方式使用 `codex -s read-only -a never app-server`，不接触私有 HTTP 额度接口，也不改变 Codex 的安装包、登录状态或运行参数。
 
-这是一种独立显示层：它不会嵌入 Codex 宠物，也不会影响 Codex 正常使用。额度读取失败时只影响窗口显示，并保留上次成功数据。
+这是独立 companion：它不会嵌入 Codex 宠物，也不会影响 Codex 正常使用。Apple 的 AppKit 规定 Touch Bar 显示当前前台应用提供的内容，因此切回 Codex 后，Touch Bar 会恢复 Codex 自己的控件；脚本不会抢夺 Codex 焦点。若要在 Codex 前台时持续显示，需要后续做 Codex 集成或使用 BetterTouchTool/MTMR 等全局 Touch Bar 工具。
 
 ## GitHub
 

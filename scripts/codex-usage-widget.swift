@@ -184,37 +184,149 @@ enum LiveUsageFetcher {
     }
 }
 
-final class FloatingPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-}
+final class QuotaPillView: NSView {
+    private let label = NSTextField(labelWithString: "")
 
-final class UsageWidgetController: NSObject, NSWindowDelegate {
-    private let store = UsageStore()
-    private let panel: FloatingPanel
-    private var refreshTimer: Timer?
-    private let fiveHourField = NSTextField(string: "")
-    private let weeklyField = NSTextField(string: "")
-    private let statusLabel = NSTextField(labelWithString: "")
-    private let feedbackLabel = NSTextField(labelWithString: "")
+    init(width: CGFloat) {
+        super.init(frame: NSRect(x: 0, y: 0, width: width, height: 30))
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.backgroundColor = NSColor(white: 0.16, alpha: 0.96).cgColor
+        layer?.borderWidth = 1
+        layer?.borderColor = NSColor(white: 1, alpha: 0.14).cgColor
 
-    override init() {
-        panel = FloatingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 420),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        super.init()
-        configurePanel()
-        buildView()
-        loadSnapshot()
+        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        label.textColor = .white
+        label.alignment = .center
+        label.frame = bounds.insetBy(dx: 8, dy: 3)
+        label.autoresizingMask = [.width, .height]
+        addSubview(label)
     }
 
-    func show() {
-        panel.center()
-        panel.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func update(text: String, accent: NSColor) {
+        label.stringValue = text
+        layer?.borderColor = accent.withAlphaComponent(0.62).cgColor
+    }
+}
+
+final class CodexTouchBarController: NSObject, NSTouchBarDelegate {
+    static let remIdentifier = NSTouchBarItem.Identifier("codexUsage.rem")
+    static let fiveHourIdentifier = NSTouchBarItem.Identifier("codexUsage.fiveHour")
+    static let weeklyIdentifier = NSTouchBarItem.Identifier("codexUsage.weekly")
+
+    let touchBar: NSTouchBar
+    private let remItem: NSCustomTouchBarItem
+    private let fiveHourItem: NSCustomTouchBarItem
+    private let weeklyItem: NSCustomTouchBarItem
+    private let fiveHourPill = QuotaPillView(width: 142)
+    private let weeklyPill = QuotaPillView(width: 142)
+
+    override init() {
+        remItem = NSCustomTouchBarItem(identifier: Self.remIdentifier)
+        fiveHourItem = NSCustomTouchBarItem(identifier: Self.fiveHourIdentifier)
+        weeklyItem = NSCustomTouchBarItem(identifier: Self.weeklyIdentifier)
+        touchBar = NSTouchBar()
+        super.init()
+
+        let imageView = NSImageView(frame: NSRect(x: 0, y: 0, width: 42, height: 30))
+        imageView.image = Self.remImage()
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.imageAlignment = .alignCenter
+        remItem.view = imageView
+        remItem.customizationLabel = "雷姆"
+
+        fiveHourItem.view = fiveHourPill
+        fiveHourItem.customizationLabel = "5 小时额度"
+        weeklyItem.view = weeklyPill
+        weeklyItem.customizationLabel = "1 周额度"
+
+        touchBar.delegate = self
+        touchBar.customizationIdentifier = NSTouchBar.CustomizationIdentifier("codexUsage")
+        touchBar.defaultItemIdentifiers = [
+            Self.remIdentifier,
+            .flexibleSpace,
+            Self.fiveHourIdentifier,
+            Self.weeklyIdentifier
+        ]
+        touchBar.customizationAllowedItemIdentifiers = [
+            Self.remIdentifier,
+            Self.fiveHourIdentifier,
+            Self.weeklyIdentifier,
+            .flexibleSpace
+        ]
+        touchBar.principalItemIdentifier = Self.fiveHourIdentifier
+    }
+
+    func update(snapshot: UsageSnapshot) {
+        fiveHourPill.update(
+            text: "5小时 (snapshot.fiveHour.remainingPercent)%",
+            accent: Self.accent(for: snapshot.fiveHour.remainingPercent)
+        )
+        weeklyPill.update(
+            text: "每周 (snapshot.weekly.remainingPercent)%",
+            accent: Self.accent(for: snapshot.weekly.remainingPercent)
+        )
+    }
+
+    func showUnavailable() {
+        fiveHourPill.update(text: "5小时 --", accent: .systemGray)
+        weeklyPill.update(text: "每周 --", accent: .systemGray)
+    }
+
+    func touchBar(_ touchBar: NSTouchBar, makeItemForIdentifier identifier: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
+        switch identifier {
+        case Self.remIdentifier:
+            return remItem
+        case Self.fiveHourIdentifier:
+            return fiveHourItem
+        case Self.weeklyIdentifier:
+            return weeklyItem
+        default:
+            return nil
+        }
+    }
+
+    private static func remImage() -> NSImage? {
+        let imagePath = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/CodexUsageWidget/Resources/rem.png")
+        return NSImage(contentsOf: imagePath)
+    }
+
+    static func remImageForStatusItem() -> NSImage? {
+        guard let image = remImage() else { return nil }
+        image.size = NSSize(width: 18, height: 18)
+        return image
+    }
+
+    private static func accent(for remaining: Int) -> NSColor {
+        switch remaining {
+        case 0...20:
+            return .systemRed
+        case 21...50:
+            return .systemOrange
+        default:
+            return .systemGreen
+        }
+    }
+}
+
+final class TouchBarAppController: NSObject {
+    private let store = UsageStore()
+    private let touchBarController = CodexTouchBarController()
+    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    private var refreshTimer: Timer?
+
+    func start() {
+        configureStatusItem()
+        NSApp.touchBar = touchBarController.touchBar
+        NSApp.isAutomaticCustomizeTouchBarMenuItemEnabled = true
+        refreshLiveUsage()
         refreshTimer = Timer.scheduledTimer(
             timeInterval: 60,
             target: self,
@@ -229,211 +341,70 @@ final class UsageWidgetController: NSObject, NSWindowDelegate {
         refreshTimer?.invalidate()
     }
 
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        sender.orderOut(nil)
-        return false
-    }
-
-    private func configurePanel() {
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.isMovableByWindowBackground = true
-        panel.hidesOnDeactivate = false
-        panel.delegate = self
-    }
-
-    private func buildView() {
-        let contentView = NSView(frame: panel.contentRect(forFrameRect: panel.frame))
-        contentView.wantsLayer = true
-        contentView.layer?.backgroundColor = NSColor.clear.cgColor
-        panel.contentView = contentView
-
-        let imageView = NSImageView(frame: NSRect(x: 0, y: 18, width: 245, height: 375))
-        let imagePath = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/CodexUsageWidget/Resources/rem.png")
-        imageView.image = NSImage(contentsOf: imagePath)
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.imageAlignment = .alignCenter
-        contentView.addSubview(imageView)
-
-        let card = NSVisualEffectView(frame: NSRect(x: 205, y: 82, width: 275, height: 256))
-        card.material = .hudWindow
-        card.blendingMode = .behindWindow
-        card.state = .active
-        card.wantsLayer = true
-        card.layer?.cornerRadius = 22
-        card.layer?.borderWidth = 1
-        card.layer?.borderColor = NSColor.white.withAlphaComponent(0.22).cgColor
-        contentView.addSubview(card)
-
-        let title = NSTextField(labelWithString: "Codex 用量")
-        title.font = .systemFont(ofSize: 22, weight: .semibold)
-        title.textColor = .white
-        title.frame = NSRect(x: 22, y: 211, width: 220, height: 30)
-        card.addSubview(title)
-
-        let subtitle = NSTextField(labelWithString: "只读读取 Codex，失败时保留上次数据")
-        subtitle.font = .systemFont(ofSize: 11)
-        subtitle.textColor = NSColor.white.withAlphaComponent(0.72)
-        subtitle.frame = NSRect(x: 22, y: 191, width: 230, height: 18)
-        card.addSubview(subtitle)
-
-        addUsageRow(to: card, label: "5 小时剩余", field: fiveHourField, y: 143)
-        addUsageRow(to: card, label: "1 周剩余", field: weeklyField, y: 101)
-
-        statusLabel.font = .systemFont(ofSize: 10)
-        statusLabel.textColor = NSColor.white.withAlphaComponent(0.62)
-        statusLabel.frame = NSRect(x: 22, y: 72, width: 230, height: 16)
-        card.addSubview(statusLabel)
-
-        let saveButton = NSButton(title: "保存", target: self, action: #selector(saveSnapshot))
-        saveButton.bezelStyle = .rounded
-        saveButton.keyEquivalent = "\r"
-        saveButton.frame = NSRect(x: 22, y: 31, width: 92, height: 28)
-        card.addSubview(saveButton)
-
-        let refreshButton = NSButton(title: "刷新", target: self, action: #selector(refreshLiveUsage))
-        refreshButton.bezelStyle = .rounded
-        refreshButton.frame = NSRect(x: 120, y: 31, width: 66, height: 28)
-        card.addSubview(refreshButton)
-
-        let openButton = NSButton(
-            title: "打开官方用量页",
-            target: self,
-            action: #selector(openOfficialPage)
-        )
-        openButton.bezelStyle = .rounded
-        openButton.frame = NSRect(x: 190, y: 31, width: 82, height: 28)
-        card.addSubview(openButton)
-
-        feedbackLabel.font = .systemFont(ofSize: 10)
-        feedbackLabel.textColor = NSColor.systemYellow
-        feedbackLabel.frame = NSRect(x: 22, y: 10, width: 230, height: 16)
-        card.addSubview(feedbackLabel)
-
-        let closeButton = NSButton(title: "×", target: self, action: #selector(hidePanel))
-        closeButton.isBordered = false
-        closeButton.font = .systemFont(ofSize: 22, weight: .light)
-        closeButton.contentTintColor = NSColor.white.withAlphaComponent(0.78)
-        closeButton.frame = NSRect(x: 450, y: 350, width: 30, height: 30)
-        contentView.addSubview(closeButton)
-    }
-
-    private func addUsageRow(to card: NSVisualEffectView, label: String, field: NSTextField, y: CGFloat) {
-        let labelField = NSTextField(labelWithString: label)
-        labelField.font = .systemFont(ofSize: 13, weight: .medium)
-        labelField.textColor = .white
-        labelField.frame = NSRect(x: 22, y: y + 4, width: 125, height: 20)
-        card.addSubview(labelField)
-
-        field.alignment = .right
-        field.font = .systemFont(ofSize: 16, weight: .semibold)
-        field.placeholderString = "0–100"
-        field.focusRingType = .none
-        field.frame = NSRect(x: 165, y: y, width: 87, height: 28)
-        card.addSubview(field)
-
-        let percent = NSTextField(labelWithString: "%")
-        percent.font = .systemFont(ofSize: 13)
-        percent.textColor = NSColor.white.withAlphaComponent(0.75)
-        percent.frame = NSRect(x: 253, y: y + 4, width: 18, height: 20)
-        card.addSubview(percent)
-    }
-
-    private func loadSnapshot() {
-        guard let snapshot = store.load() else {
-            statusLabel.stringValue = "正在读取 Codex 额度…"
-            refreshLiveUsage()
-            return
+    private func configureStatusItem() {
+        if let button = statusItem.button {
+            button.image = CodexTouchBarController.remImageForStatusItem()
+            button.image?.size = NSSize(width: 18, height: 18)
+            button.toolTip = "Codex 用量 Touch Bar"
         }
-        apply(snapshot, status: "上次数据：\(Self.dateFormatter.string(from: snapshot.updatedAt))")
-        refreshLiveUsage()
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "刷新额度", action: #selector(refreshLiveUsage), keyEquivalent: "r"))
+        menu.addItem(NSMenuItem(title: "激活 Touch Bar", action: #selector(activateTouchBar), keyEquivalent: "t"))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q"))
+        for item in menu.items {
+            item.target = self
+        }
+        statusItem.menu = menu
     }
 
     @objc private func refreshLiveUsage() {
-        statusLabel.stringValue = "正在读取 Codex 额度…"
         LiveUsageFetcher.fetch { [weak self] result in
             guard let self else { return }
             switch result {
             case let .success(snapshot):
                 try? self.store.save(snapshot)
-                self.apply(snapshot, status: "自动更新：\(Self.dateFormatter.string(from: snapshot.updatedAt))")
-                self.feedbackLabel.stringValue = ""
+                self.touchBarController.update(snapshot: snapshot)
+                self.updateStatusIcon(remaining: snapshot.fiveHour.remainingPercent)
             case let .failure(error):
                 let fallback = self.store.load()
                 if let fallback {
-                    self.apply(fallback, status: "自动读取失败，显示上次数据")
+                    self.touchBarController.update(snapshot: fallback)
+                    self.updateStatusIcon(remaining: fallback.fiveHour.remainingPercent)
                 } else {
-                    self.statusLabel.stringValue = "自动读取失败，请手动填写"
+                    self.touchBarController.showUnavailable()
                 }
-                self.feedbackLabel.stringValue = error.localizedDescription
+                NSLog("Codex usage refresh failed: %@", error.localizedDescription)
             }
         }
     }
 
-    private func apply(_ snapshot: UsageSnapshot, status: String) {
-        fiveHourField.stringValue = "\(snapshot.fiveHour.remainingPercent)"
-        weeklyField.stringValue = "\(snapshot.weekly.remainingPercent)"
-        statusLabel.stringValue = status
+    @objc private func activateTouchBar() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.touchBar = touchBarController.touchBar
     }
 
-    @objc private func saveSnapshot() {
-        guard
-            let fiveHourRemaining = Int(fiveHourField.stringValue),
-            let weeklyRemaining = Int(weeklyField.stringValue),
-            (0...100).contains(fiveHourRemaining),
-            (0...100).contains(weeklyRemaining)
-        else {
-            feedbackLabel.stringValue = "请输入 0–100 的剩余百分比"
-            return
-        }
-
-        do {
-            let snapshot = UsageSnapshot(
-                fiveHour: try UsageWindow(usedPercent: 100 - fiveHourRemaining),
-                weekly: try UsageWindow(usedPercent: 100 - weeklyRemaining),
-                updatedAt: Date()
-            )
-            try store.save(snapshot)
-            statusLabel.stringValue = "已手动保存：\(Self.dateFormatter.string(from: snapshot.updatedAt))"
-            feedbackLabel.stringValue = ""
-        } catch {
-            feedbackLabel.stringValue = "保存失败，请重试"
-        }
+    @objc private func quit() {
+        NSApp.terminate(nil)
     }
 
-    @objc private func openOfficialPage() {
-        guard let url = URL(string: "https://help.openai.com/en/articles/20001478") else { return }
-        NSWorkspace.shared.open(url)
+    private func updateStatusIcon(remaining: Int) {
+        statusItem.button?.title = ""
+        statusItem.button?.toolTip = "Codex 5小时剩余 \(remaining)% · Touch Bar"
     }
 
-    @objc private func hidePanel() {
-        panel.orderOut(nil)
-    }
-
-    private static let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "M月d日 HH:mm"
-        return formatter
-    }()
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var controller: UsageWidgetController?
+    private var controller: TouchBarAppController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        controller = UsageWidgetController()
-        controller?.show()
+        controller = TouchBarAppController()
+        controller?.start()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        false
+        true
     }
 }
 
