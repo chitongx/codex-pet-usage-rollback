@@ -295,7 +295,9 @@ final class CodexTouchBarController: NSObject, NSTouchBarDelegate {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/CodexUsageWidget/Resources/rem.png")
-        return NSImage(contentsOf: imagePath)
+        guard let image = NSImage(contentsOf: imagePath) else { return nil }
+        image.size = NSSize(width: 20, height: 30)
+        return image
     }
 
     static func remImageForStatusItem() -> NSImage? {
@@ -316,9 +318,34 @@ final class CodexTouchBarController: NSObject, NSTouchBarDelegate {
     }
 }
 
+final class TouchBarHostWindow: NSWindow {
+    init() {
+        super.init(
+            contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        isOpaque = false
+        backgroundColor = .clear
+        alphaValue = 0
+        ignoresMouseEvents = true
+        hasShadow = false
+        isReleasedWhenClosed = false
+    }
+
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+
+    override func makeTouchBar() -> NSTouchBar? {
+        NSApp.touchBar
+    }
+}
+
 final class TouchBarAppController: NSObject {
     private let store = UsageStore()
     private let touchBarController = CodexTouchBarController()
+    private let hostWindow = TouchBarHostWindow()
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private var refreshTimer: Timer?
 
@@ -326,6 +353,8 @@ final class TouchBarAppController: NSObject {
         configureStatusItem()
         NSApp.touchBar = touchBarController.touchBar
         NSApp.isAutomaticCustomizeTouchBarMenuItemEnabled = true
+        touchBarController.showUnavailable()
+        activateTouchBar()
         refreshLiveUsage()
         refreshTimer = Timer.scheduledTimer(
             timeInterval: 60,
@@ -381,6 +410,7 @@ final class TouchBarAppController: NSObject {
 
     @objc private func activateTouchBar() {
         NSApp.activate(ignoringOtherApps: true)
+        hostWindow.makeKeyAndOrderFront(nil)
         NSApp.touchBar = touchBarController.touchBar
     }
 
