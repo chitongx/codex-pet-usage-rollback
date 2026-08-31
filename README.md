@@ -23,45 +23,52 @@
 
 ## Codex 聚焦时的 Touch Bar 用量显示
 
-这个版本会把一个最小 Electron Touch Bar 模块安装进 Codex 的 `app.asar`，因此 Codex 聚焦时显示雷姆图标、5 小时剩余和每周剩余；切换到其他应用后，Touch Bar 会由其他前台应用接管。额度读取仍通过本机 Codex CLI 的只读 `app-server` 完成，不读取 Cookies、钥匙串或登录令牌。
+最终方案使用独立 Swift 后台助手，不修改 Codex.app，也不启动桌面透明窗口。助手监听前台应用：只有 `com.openai.codex` 聚焦时，才用系统级 Touch Bar 显示雷姆图标、5 小时剩余和每周剩余；切换到其他应用后自动收回，让其他应用恢复自己的 Touch Bar。
 
-安装前先做 dry-run：
+两个额度框都使用剩余百分比作为填充宽度：例如剩余 30%，彩色填充只占框宽度的 30%，文字保持居中。周额度还会显示窗口重置前的剩余天数（不足一天时显示小时数）。
 
-```bash
-./scripts/install-codex-touchbar.sh --dry-run
-```
-
-确认无误并完全退出 Codex 后安装：
+安装并设置登录后自动运行：
 
 ```bash
-./scripts/install-codex-touchbar.sh --install
+./scripts/install-codex-touchbar-helper.sh
 ```
 
-安装脚本只接受与本项目备份哈希一致的 Codex 版本，避免误改未知更新。Codex 更新后可能覆盖修改，需要重新 dry-run/安装。
+它通过 macOS 的 `presentSystemModalTouchBar` 和 `DFRFoundation` 实现系统级展示。这是目前能压过输入框“打字建议栏”的方式，但属于 macOS 私有 API，系统升级后可能需要适配。额度仍通过本机 Codex CLI 的只读 `app-server` 获取，不读取 Cookies、钥匙串或登录令牌。
 
 额度缓存文件位于：
 
 `~/Library/Application Support/CodexUsageWidget/usage.json`
 
-双击下面的文件即可启动：
+日志位于：
 
-`scripts/run-codex-usage-widget.command`
+`~/Library/Logs/codex-usage-touchbar.log`
 
-也可以在终端运行：
-
-```bash
-./scripts/run-codex-usage-widget.command
-```
-
-安装后 Codex 每个新建窗口都会获得 Touch Bar，约每分钟自动刷新。实现使用 Electron 官方 `BrowserWindow.setTouchBar()`；Touch Bar API 本身是实验性 API。
-
-恢复原版：
+如需停用自动助手：
 
 ```bash
-./scripts/restore-codex-original.sh
+launchctl bootout "gui/$(id -u)/com.chitongx.codex-usage-touchbar"
+rm "$HOME/Library/LaunchAgents/com.chitongx.codex-usage-touchbar.plist"
 ```
 
-恢复脚本会校验原始 `app.asar` 后替换它。独立 Swift 悬浮窗脚本仍保留在项目中，但不再是默认方案。
+## 自定义动漫角色
+
+默认显示内置雷姆，也可以用透明 PNG 替换角色，不需要修改 Codex.app：
+
+```bash
+./scripts/set-character.sh "/绝对路径/你的角色.png"
+```
+
+图片会复制到 `~/.config/codex-touchbar/character.png`，仅保存在本机；重启助手或切换回 Codex 后生效。恢复内置雷姆：
+
+```bash
+./scripts/set-character.sh --reset
+```
+
+完整图片要求和重新安装步骤见 [`docs/CUSTOM_CHARACTER.md`](docs/CUSTOM_CHARACTER.md)。
+
+如果想把模型名、会话名、刷新时间或其他设置放到 Touch Bar，上层扩展点和示例见 [`docs/TOUCHBAR_CUSTOMIZATION.md`](docs/TOUCHBAR_CUSTOMIZATION.md)。Pro 账户若没有 5 小时窗口，程序会保留该位置并明确显示“Pro 无5小时限制”，不会因此导致周额度读取失败。
+
+旧版 Electron 注入脚本 `scripts/install-codex-touchbar.sh` 仅作为历史实验保留，不应再运行；如之前安装过它，先运行 `scripts/restore-codex-original.sh` 恢复 Codex 原始包。
 
 ## GitHub
 
