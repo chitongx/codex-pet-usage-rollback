@@ -12,5 +12,9 @@ grep -q "applicationSupport" "$script"
 grep -q "account/rateLimits/read" "$script"
 grep -q '"read-only"' "$script"
 grep -q '"app-server"' "$script"
+if grep -q 'input.fileHandleForWriting.closeFile' "$script"; then
+    echo "widget RPC must keep stdin open until the response arrives" >&2
+    exit 1
+fi
 
 echo "widget script contract: PASS"

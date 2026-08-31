@@ -58,6 +58,7 @@ enum LiveUsageError: LocalizedError {
     case codexCliNotFound
     case noRateLimitResponse
     case invalidRateLimitResponse
+    case timedOut
 
     var errorDescription: String? {
         switch self {
@@ -67,6 +68,8 @@ enum LiveUsageError: LocalizedError {
             return "Codex 没有返回额度"
         case .invalidRateLimitResponse:
             return "Codex 额度响应格式无法识别"
+        case .timedOut:
+            return "读取 Codex 额度超时"
         }
     }
 }
@@ -106,7 +109,6 @@ enum LiveUsageFetcher {
         let initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"codex-usage-widget\",\"version\":\"0.1.0\"}}}\n"
         let request = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"account/rateLimits/read\",\"params\":{}}\n"
         input.fileHandleForWriting.write(Data((initialize + request).utf8))
-        input.fileHandleForWriting.closeFile()
 
         defer {
             if process.isRunning {
@@ -114,10 +116,14 @@ enum LiveUsageFetcher {
             }
         }
 
+        let responseSignal = DispatchSemaphore(value: 0)
+        var response: [String: Any]?
         var buffer = Data()
-        while process.isRunning || !buffer.isEmpty {
-            guard let chunk = try output.fileHandleForReading.read(upToCount: 64 * 1024), !chunk.isEmpty else {
-                break
+        output.fileHandleForReading.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else {
+                responseSignal.signal()
+                return
             }
             buffer.append(chunk)
 
@@ -126,17 +132,28 @@ enum LiveUsageFetcher {
                 buffer.removeSubrange(...newline)
                 guard
                     let object = try? JSONSerialization.jsonObject(with: line),
-                    let response = object as? [String: Any],
-                    let id = response["id"] as? NSNumber,
+                    let candidate = object as? [String: Any],
+                    let id = candidate["id"] as? NSNumber,
                     id.intValue == 2
                 else {
                     continue
                 }
-                return try snapshot(from: response)
+                response = candidate
+                responseSignal.signal()
+                return
             }
         }
 
-        throw LiveUsageError.noRateLimitResponse
+        if responseSignal.wait(timeout: .now() + 8) == .timedOut {
+            output.fileHandleForReading.readabilityHandler = nil
+            throw LiveUsageError.timedOut
+        }
+        output.fileHandleForReading.readabilityHandler = nil
+
+        guard let response else {
+            throw LiveUsageError.noRateLimitResponse
+        }
+        return try snapshot(from: response)
     }
 
     private static func snapshot(from response: [String: Any]) throws -> UsageSnapshot {
